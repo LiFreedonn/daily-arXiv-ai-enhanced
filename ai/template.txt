@@ -2,3 +2,5 @@ Please analyze the following abstract of papers.
 
 Content:
 {content}
+
+Also score 0-100 as daily reading priority: 90+ only for papers directly useful to Physical AI, VLA/WAM, robot manipulation, embodied world models, 3D/4D geometry for control, or deployable robot systems; below 75 for generic surveys, benchmark-only tuning, medical/remote-sensing/domain-only CV, or papers without clear method insight.

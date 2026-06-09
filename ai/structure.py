@@ -7,3 +7,4 @@ class Structure(BaseModel):
     method: str = Field(description="method of this paper")
     result: str = Field(description="result of this paper")
     conclusion: str = Field(description="conclusion of this paper")
+    score: int = Field(description="0-100 daily reading priority score")
