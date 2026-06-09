@@ -3,4 +3,4 @@ Please analyze the following abstract of papers.
 Content:
 {content}
 
-Also score 0-100 as daily reading priority: 90+ only for papers directly useful to Physical AI, VLA/WAM, robot manipulation, embodied world models, 3D/4D geometry for control, or deployable robot systems; below 75 for generic surveys, benchmark-only tuning, medical/remote-sensing/domain-only CV, or papers without clear method insight.
+Also assign an integer score 0-100 for my daily reading priority. Use varied values, not repeated defaults. 95-100 = must-read core Physical AI/VLA/WAM/world model/reconstruction and generation with concrete method plus strong evidence such as major gains or open code. 90-94 = highly relevant but missing one major strength. 85-89 = useful adjacent embodied-AI/robotics work: perception/control, tactile manipulation, sim-to-real, robot data, humanoid/mobile manipulation. 80-84 = relevant background or tooling, not urgent. Below 80 = generic CV/AI/ML, benchmark/dataset/survey-only, domain CV, or no actionable method insight. cs.RO or code links alone must not imply 90+.
