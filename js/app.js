@@ -258,6 +258,7 @@ function outputJsonData(papers, category) {
       categories: p.category,
       summary: p.summary,
       date: p.date,
+      score: p.score,
       url: p.url,
       reason: p.matchReason
     }))
@@ -269,6 +270,31 @@ function outputJsonData(papers, category) {
 
   // 设置JSON内容
   document.body.textContent = JSON.stringify(jsonData, null, 2);
+}
+
+function parsePaperScore(paper) {
+  const rawScore = paper && paper.AI ? paper.AI.score : 0;
+  const score = Number.parseInt(rawScore, 10);
+  return Number.isNaN(score) ? 0 : score;
+}
+
+function comparePapersByScore(a, b) {
+  return (b.score || 0) - (a.score || 0);
+}
+
+function comparePapersByMatchAndScore(a, b) {
+  const hasActiveMatcher = (
+    activeKeywords.length > 0 ||
+    activeAuthors.length > 0 ||
+    (textSearchQuery && textSearchQuery.trim().length > 0)
+  );
+
+  if (hasActiveMatcher) {
+    if (a.isMatched && !b.isMatched) return -1;
+    if (!a.isMatched && b.isMatched) return 1;
+  }
+
+  return comparePapersByScore(a, b);
 }
 
 // 根据category获取论文（复用现有逻辑）
@@ -930,6 +956,7 @@ function parseJsonlData(jsonlText, date) {
         method: paper.AI && paper.AI.method ? paper.AI.method : '',
         result: paper.AI && paper.AI.result ? paper.AI.result : '',
         conclusion: paper.AI && paper.AI.conclusion ? paper.AI.conclusion : '',
+        score: parsePaperScore(paper),
         code_url: paper.code_url || '',
         code_stars: paper.code_stars || 0,
         code_last_update: paper.code_last_update || ''
@@ -1331,6 +1358,7 @@ function renderPapers() {
   }
   
   // 存储当前过滤后的论文列表，用于箭头键导航
+  filteredPapers.sort(comparePapersByMatchAndScore);
   currentFilteredPapers = [...filteredPapers];
   
   if (filteredPapers.length === 0) {
@@ -1356,6 +1384,7 @@ function renderPapers() {
     const categoryTags = paper.allCategories ? 
       paper.allCategories.map(cat => `<span class="category-tag">${cat}</span>`).join('') : 
       `<span class="category-tag">${paper.category}</span>`;
+    const scoreTag = `<span class="score-tag">Score ${paper.score || 0}</span>`;
     
     // 组合需要高亮的词：关键词 + 文本搜索
     const titleSummaryTerms = [];
@@ -1407,6 +1436,7 @@ function renderPapers() {
         <p class="paper-card-authors">${formattedAuthors}</p>
         <div class="paper-card-categories">
           ${categoryTags}
+          ${scoreTag}
         </div>
       </div>
       <div class="paper-card-body">
@@ -1503,6 +1533,7 @@ function showPaperDetails(paper, paperIndex) {
     <div class="paper-details ${matchedPaperClass}">
       <p><strong>Authors: </strong>${highlightedAuthors}</p>
       <p><strong>Categories: </strong>${categoryDisplay}</p>
+      <p><strong>Score: </strong>${paper.score || 0}</p>
       <p><strong>Date: </strong>${formatDate(paper.date)}</p>
       
       
