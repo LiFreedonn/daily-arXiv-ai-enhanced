@@ -105,9 +105,9 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
                 
         return code_info
 
-    # 检查 summary 字段
-    if is_sensitive(item.get("summary", "")):
-        return None
+    # # 检查 summary 字段
+    # if is_sensitive(item.get("summary", "")):
+    #     return None
 
     # 检测代码可用性
     code_info = check_github_code(item.get("summary", ""))
@@ -160,10 +160,10 @@ def process_single_item(chain, item: Dict, language: str) -> Dict:
         if field not in item['AI']:
             item['AI'][field] = default_ai_fields[field]
 
-    # 检查 AI 生成的所有字段
-    for v in item.get("AI", {}).values():
-        if is_sensitive(str(v)):
-            return None
+    # # 检查 AI 生成的所有字段
+    # for v in item.get("AI", {}).values():
+    #     if is_sensitive(str(v)):
+    #         return None
     return item
 
 def process_all_items(data: List[Dict], model_name: str, language: str, max_workers: int) -> List[Dict]:
