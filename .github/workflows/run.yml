@@ -55,7 +55,21 @@ jobs:
         
         echo "crawl_date=$today" >> $GITHUB_OUTPUT
         echo "爬取完成 / Crawling completed"
-        
+
+    - name: Restore recent history for dedup
+      run: |
+        git fetch origin data --depth=1 2>/dev/null || true
+        today=${{ steps.crawl_step.outputs.crawl_date }}
+        for i in $(seq 1 7); do
+          d=$(date -u -d "$today -$i day" "+%Y-%m-%d")
+          if git show origin/data:data/${d}.jsonl > "data/${d}.jsonl.tmp" 2>/dev/null; then
+            mv "data/${d}.jsonl.tmp" "data/${d}.jsonl"
+          else
+            rm -f "data/${d}.jsonl.tmp"
+          fi
+        done
+        echo "已恢复最近 7 天历史用于去重 / Restored recent history for dedup"
+
     - name: Check for duplicates
       id: dedup_check
       run: |
