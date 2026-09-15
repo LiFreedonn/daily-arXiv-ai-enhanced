@@ -1,77 +1,136 @@
-import scrapy
 import os
 import re
 
+import scrapy
+
 
 class ArxivSpider(scrapy.Spider):
+    name = "arxiv"
+    allowed_domains = ["arxiv.org"]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         categories = os.environ.get("CATEGORIES", "cs.CV")
-        categories = categories.split(",")
-        # 保存目标分类列表，用于后续验证
-        self.target_categories = set(map(str.strip, categories))
+        self.target_categories = {
+            category.strip() for category in categories.split(",") if category.strip()
+        }
         self.start_urls = [
-            f"https://arxiv.org/list/{cat}/new" for cat in self.target_categories
-        ]  # 起始URL（计算机科学领域的最新论文）
-
-    name = "arxiv"  # 爬虫名称
-    allowed_domains = ["arxiv.org"]  # 允许爬取的域名
+            f"https://arxiv.org/list/{category}/new"
+            for category in sorted(self.target_categories)
+        ]
+        self.seen_ids = set()
 
     def parse(self, response):
-        # 提取每篇论文的信息
-        anchors = []
-        for li in response.css("div[id=dlpage] ul li"):
-            href = li.css("a::attr(href)").get()
-            if href and "item" in href:
-                anchors.append(int(href.split("item")[-1]))
+        section_anchors = []
+        for href in response.css("div#dlpage ul a::attr(href)").getall():
+            match = re.fullmatch(r"#item(\d+)", href)
+            if match:
+                section_anchors.append(int(match.group(1)))
 
-        # 遍历每篇论文的详细信息
-        for paper in response.css("dl dt"):
-            paper_anchor = paper.css("a[name^='item']::attr(name)").get()
+        # The second navigation anchor begins Cross-lists. If it is absent, the
+        # page contains only New submissions and all entries remain in scope.
+        new_submissions_end = section_anchors[1] if len(section_anchors) > 1 else None
+
+        for paper_dt in response.css("dl dt"):
+            paper_anchor = paper_dt.css("a[name^='item']::attr(name)").get()
             if not paper_anchor:
                 continue
-                
-            paper_id = int(paper_anchor.split("item")[-1])
-            if anchors and paper_id >= anchors[-1]:
+
+            anchor_match = re.fullmatch(r"item(\d+)", paper_anchor)
+            if not anchor_match:
+                self._parser_failure(response, "<unknown>", "invalid listing anchor")
+
+            if new_submissions_end is not None and int(anchor_match.group(1)) >= new_submissions_end:
                 continue
 
-            # 获取论文ID
-            abstract_link = paper.css("a[title='Abstract']::attr(href)").get()
+            abstract_link = paper_dt.css("a[title='Abstract']::attr(href)").get()
             if not abstract_link:
-                continue
-                
-            arxiv_id = abstract_link.split("/")[-1]
-            
-            # 获取对应的论文描述部分 (dd元素)
-            paper_dd = paper.xpath("following-sibling::dd[1]")
+                self._parser_failure(response, "<unknown>", "missing abstract link")
+            arxiv_id = abstract_link.rstrip("/").split("/")[-1]
+
+            paper_dd = paper_dt.xpath("following-sibling::dd[1]")
             if not paper_dd:
+                self._parser_failure(response, arxiv_id, "missing adjacent metadata block")
+
+            title = self._field_text(paper_dd, "list-title")
+            authors = self._authors(paper_dd)
+            categories = self._categories(paper_dd)
+            comment = self._field_text(paper_dd, "list-comments") or None
+            summary = self._summary(paper_dd)
+
+            required_fields = {
+                "title": title,
+                "authors": authors,
+                "categories": categories,
+                "summary": summary,
+            }
+            missing_fields = [name for name, value in required_fields.items() if not value]
+            if missing_fields:
+                self._parser_failure(
+                    response,
+                    arxiv_id,
+                    f"missing required fields: {', '.join(missing_fields)}",
+                )
+
+            if not set(categories).intersection(self.target_categories):
+                self.logger.debug(
+                    "Skipped paper %s with categories %s (not in target %s)",
+                    arxiv_id,
+                    categories,
+                    sorted(self.target_categories),
+                )
                 continue
-            
-            # 提取论文分类信息 - 在subjects部分
-            subjects_text = paper_dd.css(".list-subjects .primary-subject::text").get()
-            if not subjects_text:
-                # 如果找不到主分类，尝试其他方式获取分类
-                subjects_text = paper_dd.css(".list-subjects::text").get()
-            
-            if subjects_text:
-                # 解析分类信息，通常格式如 "Computer Vision and Pattern Recognition (cs.CV)"
-                # 提取括号中的分类代码
-                categories_in_paper = re.findall(r'\(([^)]+)\)', subjects_text)
-                
-                # 检查论文分类是否与目标分类有交集
-                paper_categories = set(categories_in_paper)
-                if paper_categories.intersection(self.target_categories):
-                    yield {
-                        "id": arxiv_id,
-                        "categories": list(paper_categories),  # 添加分类信息用于调试
-                    }
-                    self.logger.info(f"Found paper {arxiv_id} with categories {paper_categories}")
-                else:
-                    self.logger.debug(f"Skipped paper {arxiv_id} with categories {paper_categories} (not in target {self.target_categories})")
-            else:
-                # 如果无法获取分类信息，记录警告但仍然返回论文（保持向后兼容）
-                self.logger.warning(f"Could not extract categories for paper {arxiv_id}, including anyway")
-                yield {
-                    "id": arxiv_id,
-                    "categories": [],
-                }
+
+            if arxiv_id in self.seen_ids:
+                self.logger.debug("Skipped duplicate paper %s", arxiv_id)
+                continue
+
+            self.seen_ids.add(arxiv_id)
+            yield {
+                "id": arxiv_id,
+                "pdf": f"https://arxiv.org/pdf/{arxiv_id}",
+                "abs": f"https://arxiv.org/abs/{arxiv_id}",
+                "authors": authors,
+                "title": title,
+                "categories": categories,
+                "comment": comment,
+                "summary": summary,
+            }
+
+    @staticmethod
+    def _normalize_text(values):
+        return " ".join(" ".join(value.split()) for value in values if value.strip())
+
+    def _field_text(self, paper_dd, class_name):
+        field = paper_dd.css(f".{class_name}")
+        return self._normalize_text(
+            field.xpath(
+                ".//text()[not(ancestor::span[contains(concat(' ', normalize-space(@class), ' '), ' descriptor ')])]"
+            ).getall()
+        )
+
+    def _authors(self, paper_dd):
+        return [
+            author
+            for author in (
+                self._normalize_text([name])
+                for name in paper_dd.css(".list-authors a::text").getall()
+            )
+            if author
+        ]
+
+    def _categories(self, paper_dd):
+        subjects = self._field_text(paper_dd, "list-subjects")
+        return re.findall(r"\(([a-zA-Z-]+\.[a-zA-Z-]+)\)", subjects)
+
+    def _summary(self, paper_dd):
+        return self._normalize_text(
+            paper_dd.xpath(
+                ".//div[contains(@class, 'meta')]/p[1]//text()[not(ancestor::span[contains(concat(' ', normalize-space(@class), ' '), ' descriptor ')])]"
+            ).getall()
+        )
+
+    def _parser_failure(self, response, arxiv_id, reason):
+        message = f"List-page parser failure for paper {arxiv_id} at {response.url}: {reason}"
+        self.logger.error(message)
+        raise ValueError(message)
