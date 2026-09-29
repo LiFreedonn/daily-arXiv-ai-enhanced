@@ -169,6 +169,17 @@ jobs:
         ls data/*.jsonl | sed 's|data/||' > assets/file-list.txt
         echo "文件列表更新完成 / File list updated"
 
+    - name: Save generated data artifact
+      if: steps.dedup_check.outputs.has_new_content == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: arxiv-data-${{ steps.crawl_step.outputs.crawl_date }}
+        path: |
+          data/
+          assets/file-list.txt
+        if-no-files-found: error
+        retention-days: 30
+
     - name: Generate password hash and inject into config
       if: steps.dedup_check.outputs.has_new_content == 'true'
       run: |
@@ -371,12 +382,13 @@ jobs:
         # 尝试推送数据变更到 data 分支 / Try to push data changes to data branch
         for i in {1..3}; do
           echo "推送数据变更尝试 $i / Push data changes attempt $i"
-          if git push origin data; then
+          if git push origin HEAD:data; then
             echo "数据变更推送成功 / Data changes pushed successfully"
             break
           else
-            echo "推送失败，拉取最新变更... / Push failed, pulling latest changes..."
-            git pull origin data --no-edit || true
+            echo "推送失败，基于远端最新 data 分支重新整理提交... / Push failed, rebasing onto the latest remote data branch..."
+            git fetch origin data
+            git rebase origin/data
             if [ $i -eq 3 ]; then
               echo "3次尝试后推送失败 / Failed to push after 3 attempts"
               exit 1
