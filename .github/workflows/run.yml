@@ -178,7 +178,7 @@ jobs:
           data/
           assets/file-list.txt
         if-no-files-found: error
-        retention-days: 30
+        retention-days: 7
 
     - name: Generate password hash and inject into config
       if: steps.dedup_check.outputs.has_new_content == 'true'
