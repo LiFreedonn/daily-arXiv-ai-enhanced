@@ -19,96 +19,37 @@ jobs:
         curl -LsSf https://astral.sh/uv/install.sh | sh
         uv sync
         
+    - name: Restore complete processed history
+      run: |
+        git fetch origin data --depth=1
+        mkdir -p /tmp/arxiv-history
+        git archive FETCH_HEAD data | tar -x -C /tmp/arxiv-history
+
     - name: Crawl arXiv papers
       id: crawl_step
+      env:
+        CATEGORIES: ${{ vars.CATEGORIES }}
+        LANGUAGE: ${{ vars.LANGUAGE }}
       run: |
         source .venv/bin/activate
         today=$(date -u "+%Y-%m-%d")
-        echo "开始爬取 $today 的arXiv论文... / Starting to crawl $today arXiv papers..."
-        
-        # 检查今日文件是否已存在，如存在则删除 / Check if today's file exists, delete if found
-        if [ -f "data/${today}.jsonl" ]; then
-            echo "🗑️ 发现今日文件已存在，正在删除重新生成... / Found existing today's file, deleting for fresh start..."
-            rm "data/${today}.jsonl"
-            echo "✅ 已删除现有文件：data/${today}.jsonl / Deleted existing file: data/${today}.jsonl"
-        else
-            echo "📝 今日文件不存在，准备新建... / Today's file doesn't exist, ready to create new one..."
-        fi
-        
-        cd daily_arxiv
-        export OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
-        export OPENAI_BASE_URL=${{ secrets.OPENAI_BASE_URL }}
-        export TOKEN_GITHUB=${{ secrets.TOKEN_GITHUB }}
-        export LANGUAGE="${{ vars.LANGUAGE }}"
-        export CATEGORIES="${{ vars.CATEGORIES }}"
-        export MODEL_NAME="${{ vars.MODEL_NAME }}"
-        
-        # 使用Scrapy爬取
-        # Use Scrapy to crawl
-        scrapy crawl arxiv -o ../data/${today}.jsonl
-        
-        # 检查爬取是否成功 / Check if crawling was successful
-        if [ ! -f "../data/${today}.jsonl" ]; then
-            echo "爬取失败，未生成数据文件 / Crawling failed, no data file generated"
-            exit 1
-        fi
-        
-        echo "crawl_date=$today" >> $GITHUB_OUTPUT
-        echo "爬取完成 / Crawling completed"
-
-    - name: Restore recent history for dedup
-      run: |
-        git fetch origin data --depth=1 2>/dev/null || true
-        today=${{ steps.crawl_step.outputs.crawl_date }}
-        for i in $(seq 1 7); do
-          d=$(date -u -d "$today -$i day" "+%Y-%m-%d")
-          if git show origin/data:data/${d}.jsonl > "data/${d}.jsonl.tmp" 2>/dev/null; then
-            mv "data/${d}.jsonl.tmp" "data/${d}.jsonl"
-          else
-            rm -f "data/${d}.jsonl.tmp"
-          fi
-        done
-        echo "已恢复最近 7 天历史用于去重 / Restored recent history for dedup"
+        python daily_arxiv/recover_history.py \
+          --history /tmp/arxiv-history/data \
+          --categories "$CATEGORIES" --language "$LANGUAGE" \
+          --output "data/${today}.jsonl"
+        echo "crawl_date=$today" >> "$GITHUB_OUTPUT"
 
     - name: Check for duplicates
       id: dedup_check
       run: |
-        source .venv/bin/activate
-        echo "执行去重检查... / Performing intelligent deduplication check..."
-        
-        cd daily_arxiv
-        # 执行去重检查脚本 / Execute intelligent deduplication check script
-        set +e  # 暂时允许命令失败 / Temporarily allow command failure
-        python daily_arxiv/check_stats.py
-        
-        # 获取退出码 / Get exit code
-        dedup_exit_code=$?
-        set -e  # 恢复严格模式 / Restore strict mode
-        
-        echo "去重检查退出码: $dedup_exit_code / Dedup check exit code: $dedup_exit_code"
-        echo "dedup_exit_code=$dedup_exit_code" >> $GITHUB_OUTPUT
-        
-        case $dedup_exit_code in
-            0)
-                echo "has_new_content=true" >> $GITHUB_OUTPUT
-                ;;
-            1)
-                echo "has_new_content=false" >> $GITHUB_OUTPUT
-                echo "skip_reason=no_new_content" >> $GITHUB_OUTPUT
-                ;;
-            2)
-                echo "has_new_content=false" >> $GITHUB_OUTPUT
-                echo "skip_reason=processing_error" >> $GITHUB_OUTPUT
-                exit 1
-                ;;
-            *)
-                echo "❌ 未知退出码，停止工作流 / Unknown exit code, stop workflow"
-                echo "has_new_content=false" >> $GITHUB_OUTPUT
-                echo "skip_reason=unknown_error" >> $GITHUB_OUTPUT
-                exit 1
-                ;;
-        esac
-        
+        today=${{ steps.crawl_step.outputs.crawl_date }}
+        if [ -s "data/${today}.jsonl" ]; then
+          echo "has_new_content=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_new_content=false" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=no_new_content" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: AI Enhancement Processing
       if: steps.dedup_check.outputs.has_new_content == 'true'
       run: |
@@ -131,6 +72,16 @@ jobs:
         fi
         echo "AI增强处理完成 / AI enhancement processing completed"
         
+    - name: Merge previously published same-day papers
+      if: steps.dedup_check.outputs.has_new_content == 'true'
+      env:
+        LANGUAGE: ${{ vars.LANGUAGE }}
+      run: |
+        source .venv/bin/activate
+        today=${{ steps.crawl_step.outputs.crawl_date }}
+        python daily_arxiv/recover_history.py --merge-date "$today" \
+          --history /tmp/arxiv-history/data --output data --language "$LANGUAGE"
+
     - name: Convert to Markdown
       if: steps.dedup_check.outputs.has_new_content == 'true'
       run: |
@@ -166,7 +117,7 @@ jobs:
       if: steps.dedup_check.outputs.has_new_content == 'true'
       run: |
         echo "更新文件列表... / Updating file list..."
-        ls data/*.jsonl | sed 's|data/||' > assets/file-list.txt
+        find /tmp/arxiv-history/data data -maxdepth 1 -name '*.jsonl' -printf '%f\n' | sort -u > assets/file-list.txt
         echo "文件列表更新完成 / File list updated"
 
     - name: Save generated data artifact

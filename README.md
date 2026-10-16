@@ -143,3 +143,41 @@ We sincerely thank the following individuals and organizations for their promoti
 
 # Buy me a coffee
 [here](./buy-me-a-coffee/README.md)
+
+
+## Recovering missed papers
+
+The GitHub workflow reads `/new` and `/recent` for every configured `CATEGORIES`
+entry, including cross-listed papers. `/recent` covers the five most recent
+announcement days; it is not an arbitrary date-range archive. Listings must be
+complete within `show=2000`; an incomplete listing fails explicitly rather than
+silently skipping remaining entries.
+
+Before crawling, the workflow restores the complete remote `data` snapshot.
+Only successful records in `*_AI_enhanced_<LANGUAGE>.jsonl` count as processed.
+Low scores count as completed; raw-only records and known AI failure placeholders
+are retried. Version suffixes are removed when comparing IDs. Missing papers are
+loaded from their abstract pages, with requests spaced at least three seconds
+apart. Network and metadata errors stop the crawl without publishing partial
+output. Reruns merge newly processed papers with previously published same-day
+records. Historical records remain on the data branch.
+
+For local collection without AI processing or publishing:
+
+```sh
+.venv/bin/python daily_arxiv/recover_history.py \
+  --history /path/to/data-branch/data \
+  --categories cs.CV,cs.RO --language Chinese \
+  --output /tmp/recovered-papers.jsonl
+```
+
+Use an independent checkout of the remote data branch for `--history`; the
+command requires existing AI-enhanced history and fails if it cannot find it.
+The first recovery can include over a thousand papers and take over an hour
+before AI processing. The script prints candidate counts, each recovered ID,
+and elapsed collection time. It does not invoke the AI model itself.
+
+Validation uses `python -m unittest discover -s daily_arxiv/tests -v` with a
+600-second process timeout. Coverage includes incomplete listings, cross-lists,
+replacement exclusion, low-score deduplication, failed-item retries, preservation
+of output on network failure, and same-day merging.
