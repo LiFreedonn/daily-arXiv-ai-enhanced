@@ -8,6 +8,8 @@ from urllib.request import urlopen
 
 from scrapy.http import HtmlResponse
 
+from daily_arxiv.spiders.arxiv import ArxivSpider
+
 
 def normalize_id(value):
     return re.sub(r"v\d+$", "", value)
@@ -91,23 +93,43 @@ class Fetcher:
 def collect(categories, history, language, output, fetch):
     completed = completed_ids(history, language)
     candidates = set()
+    new_listings = []
     for category in categories:
         for kind in ("new", "recent"):
             response = fetch(f"https://arxiv.org/list/{category}/{kind}?skip=0&show=2000")
             ids = listing_ids(response, kind)
             candidates.update(ids)
+            if kind == "new":
+                new_listings.append((response, set(ids)))
             print(f"{category}/{kind}: {len(ids)} entries", flush=True)
     pending = sorted(candidates - completed)
     print(f"Candidates={len(candidates)}, completed={len(candidates & completed)}, pending={len(pending)}", flush=True)
+    metadata = {}
+    parser = ArxivSpider()
+    pending_ids = set(pending)
+    for response, eligible in new_listings:
+        for entry in response.css("dl dt"):
+            href = entry.css('a[title="Abstract"]::attr(href)').get()
+            pid = normalize_id(href.rsplit("/", 1)[-1]) if href else None
+            if pid in eligible and pid in pending_ids and pid not in metadata:
+                item = parser.listing_item(entry, response)
+                item["id"] = pid
+                metadata[pid] = item
+    print(f"List metadata={len(metadata)}, detail requests={len(pending) - len(metadata)}", flush=True)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(".jsonl.tmp")
     try:
         with temporary.open("w") as handle:
             for index, pid in enumerate(pending, 1):
-                item = detail_item(fetch(f"https://arxiv.org/abs/{pid}"), pid)
+                if pid in metadata:
+                    item = metadata[pid]
+                    source = "List"
+                else:
+                    item = detail_item(fetch(f"https://arxiv.org/abs/{pid}"), pid)
+                    source = "Detail"
                 handle.write(json.dumps(item, ensure_ascii=False) + "\n")
-                print(f"Detail {index}/{len(pending)}: {pid}", flush=True)
+                print(f"{source} {index}/{len(pending)}: {pid}", flush=True)
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)

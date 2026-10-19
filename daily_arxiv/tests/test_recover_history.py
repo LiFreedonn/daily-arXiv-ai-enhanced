@@ -49,7 +49,7 @@ class RecoveryTests(unittest.TestCase):
             calls=[]
             def fetch(url):
                 calls.append(url)
-                if '/list/' in url:return listing(['1','2','2'])
+                if '/list/' in url:return listing(['1'] if '/new?' in url else ['1','2','2'])
                 raise RuntimeError('request failure')
             with self.assertRaises(RuntimeError): collect(['cs.RO'],d,'Chinese',output,fetch)
             self.assertEqual(output.read_text(),'original')
@@ -64,6 +64,53 @@ class RecoveryTests(unittest.TestCase):
                 (new/('2026-10-16'+suffix)).write_text(json.dumps(row('2'))+'\n')
             merge_day(old,new,'2026-10-16','Chinese')
             self.assertEqual([json.loads(x)['id'] for x in (new/'2026-10-16.jsonl').read_text().splitlines()],['1','2'])
+
+
+    def test_new_metadata_avoids_details_with_crosslists_and_versions(self):
+        from test_list_page_metadata import LISTING_HTML
+        html = LISTING_HTML.replace('<h3>New submissions</h3>', '<h3>New submissions (showing 2 of 2 entries)</h3>')
+        html = html.replace('<h3>Cross-lists</h3>', '<h3>Cross-lists (showing 1 of 1 entries)</h3>')
+        html = html.replace('<h3>Replacements</h3>', '<h3>Replacements (showing 1 of 1 entries)</h3>')
+        html = html.replace('2609.00001', '2609.00001v2')
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, 'old_AI_enhanced_Chinese.jsonl').write_text(json.dumps(row('2609.00002')))
+            calls = []
+            def fetch(url):
+                calls.append(url)
+                if '/new?' in url:
+                    return response(html, url)
+                if '/recent?' in url:
+                    return listing(['2609.00001', '2609.00002', '2609.00003'])
+                self.fail(f'Unexpected detail request: {url}')
+            output = Path(d, 'out.jsonl')
+            self.assertEqual(collect(['cs.CV', 'cs.RO'], d, 'Chinese', output, fetch), 2)
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual([r['id'] for r in rows], ['2609.00001', '2609.00003'])
+            self.assertEqual(rows[0]['summary'], 'First abstract text.')
+            self.assertEqual(rows[1]['summary'], 'Ignored abstract.')
+            self.assertEqual(len(calls), 4)
+
+    def test_recent_only_fetches_details_and_new_missing_summary_fails(self):
+        from test_list_page_metadata import LISTING_HTML
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, 'old_AI_enhanced_Chinese.jsonl').write_text(json.dumps(row('old')))
+            calls = []
+            detail_html = '<meta name="citation_arxiv_id" content="new"><meta name="citation_title" content="Title"><meta name="citation_abstract" content="Summary"><meta name="citation_author" content="Author"><table><tr><td class="subjects">Robotics (cs.RO)</td></tr></table>'
+            def fetch(url):
+                calls.append(url)
+                if '/new?' in url:
+                    return listing(['old'])
+                if '/recent?' in url:
+                    return listing(['new', 'old'])
+                return response(detail_html, url)
+            output = Path(d, 'out.jsonl')
+            self.assertEqual(collect(['cs.RO'], d, 'Chinese', output, fetch), 1)
+            self.assertEqual(sum('/abs/' in url for url in calls), 1)
+            original = output.read_text()
+            invalid = LISTING_HTML.replace('<h3>New submissions</h3>', '<h3>New submissions (showing 4 of 4 entries)</h3>').replace('First\n abstract text.', '')
+            with self.assertRaisesRegex(ValueError, 'summary'):
+                collect(['cs.RO'], d, 'Chinese', output, lambda url: response(invalid, url))
+            self.assertEqual(output.read_text(), original)
 
 
 if __name__=='__main__':unittest.main()

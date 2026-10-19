@@ -43,34 +43,9 @@ class ArxivSpider(scrapy.Spider):
             if new_submissions_end is not None and int(anchor_match.group(1)) >= new_submissions_end:
                 continue
 
-            abstract_link = paper_dt.css("a[title='Abstract']::attr(href)").get()
-            if not abstract_link:
-                self._parser_failure(response, "<unknown>", "missing abstract link")
-            arxiv_id = abstract_link.rstrip("/").split("/")[-1]
-
-            paper_dd = paper_dt.xpath("following-sibling::dd[1]")
-            if not paper_dd:
-                self._parser_failure(response, arxiv_id, "missing adjacent metadata block")
-
-            title = self._field_text(paper_dd, "list-title")
-            authors = self._authors(paper_dd)
-            categories = self._categories(paper_dd)
-            comment = self._field_text(paper_dd, "list-comments") or None
-            summary = self._summary(paper_dd)
-
-            required_fields = {
-                "title": title,
-                "authors": authors,
-                "categories": categories,
-                "summary": summary,
-            }
-            missing_fields = [name for name, value in required_fields.items() if not value]
-            if missing_fields:
-                self._parser_failure(
-                    response,
-                    arxiv_id,
-                    f"missing required fields: {', '.join(missing_fields)}",
-                )
+            item = self.listing_item(paper_dt, response)
+            arxiv_id = item["id"]
+            categories = item["categories"]
 
             if not set(categories).intersection(self.target_categories):
                 self.logger.debug(
@@ -86,16 +61,49 @@ class ArxivSpider(scrapy.Spider):
                 continue
 
             self.seen_ids.add(arxiv_id)
-            yield {
-                "id": arxiv_id,
-                "pdf": f"https://arxiv.org/pdf/{arxiv_id}",
-                "abs": f"https://arxiv.org/abs/{arxiv_id}",
-                "authors": authors,
-                "title": title,
-                "categories": categories,
-                "comment": comment,
-                "summary": summary,
-            }
+            yield item
+
+    def listing_item(self, paper_dt, response):
+        """Extract complete metadata from one /new entry, including cross-lists."""
+        abstract_link = paper_dt.css("a[title='Abstract']::attr(href)").get()
+        if not abstract_link:
+            self._parser_failure(response, "<unknown>", "missing abstract link")
+        arxiv_id = abstract_link.rstrip("/").split("/")[-1]
+
+        paper_dd = paper_dt.xpath("following-sibling::dd[1]")
+        if not paper_dd:
+            self._parser_failure(response, arxiv_id, "missing adjacent metadata block")
+
+        title = self._field_text(paper_dd, "list-title")
+        authors = self._authors(paper_dd)
+        categories = self._categories(paper_dd)
+        comment = self._field_text(paper_dd, "list-comments") or None
+        summary = self._summary(paper_dd)
+
+        required_fields = {
+            "title": title,
+            "authors": authors,
+            "categories": categories,
+            "summary": summary,
+        }
+        missing_fields = [name for name, value in required_fields.items() if not value]
+        if missing_fields:
+            self._parser_failure(
+                response,
+                arxiv_id,
+                f"missing required fields: {', '.join(missing_fields)}",
+            )
+
+        return {
+            "id": arxiv_id,
+            "pdf": f"https://arxiv.org/pdf/{arxiv_id}",
+            "abs": f"https://arxiv.org/abs/{arxiv_id}",
+            "authors": authors,
+            "title": title,
+            "categories": categories,
+            "comment": comment,
+            "summary": summary,
+        }
 
     @staticmethod
     def _normalize_text(values):
